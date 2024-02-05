@@ -1,0 +1,49 @@
+version: '3'
+
+services:
+
+  # Spanner Emulator
+  spanner:
+    image: gcr.io/cloud-spanner-emulator/emulator:1.5.14
+    ports:
+      - "9010:9010"
+      - "9020:9020"
+
+  # Init gcloud command and setup emulator
+  init:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:461.0.0-slim
+
+    # Emulator使用時の設定について
+    # Reference:
+    # https://cloud.google.com/spanner/docs/emulator?hl=ja#use-gcloud
+    #
+    # bash -c コマンドの中で以下の動作を行う
+    # 1. 'emulator'という名前のgcloud設定をアクティブにする。存在しない場合は新たに作成する
+    # 2. 認証を無効にする
+    # 3. プロジェクトIDを設定する
+    # 4. SpannerのAPIエンドポイントを設定する
+    # 5. インスタンスが存在しない場合、Spannerのインスタンスを作成する
+    # 6. データベースが存在しない場合、Spannerのデータベースを作成する
+    command: >
+      bash -c 'gcloud config configurations activate emulator || gcloud config configurations create emulator &&
+              gcloud config set auth/disable_credentials true &&
+              gcloud config set project test-project &&
+              gcloud config set api_endpoint_overrides/spanner http://spanner:9020/ &&
+              if ! gcloud spanner instances describe test-instance > /dev/null 2>&1; then
+                  gcloud spanner instances create test-instance --config=emulator-config --description=Emulator --nodes=1;
+              fi &&
+              if ! gcloud spanner databases list --instance=test-instance | grep test-database > /dev/null 2>&1; then
+                  gcloud spanner databases create test-database --instance=test-instance;
+              fi'
+    depends_on:
+      - spanner
+
+  flyway:
+    image: redgate/flyway:10.7.1
+    command: migrate
+    volumes:
+      - ./db/migrations:/flyway/sql
+    depends_on:
+      - init
+    environment:
+      FLYWAY_URL: jdbc:cloudspanner://spanner:9010/projects/test-project/instances/test-instance/databases/test-database?usePlainText=true
